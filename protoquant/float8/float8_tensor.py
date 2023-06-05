@@ -2,7 +2,7 @@ from enum import Enum
 import torch
 from torch.utils._pytree import tree_map
 
-from float8_utils import E4M3, E5M2
+from float8_utils import E4M3, E5M2, tensor_to_scale
 
 aten = torch.ops.aten
 
@@ -131,9 +131,17 @@ class Float8Tensor(torch.Tensor):
                 return t.to_float32()
             return t
 
+        def maybe_wrap(t):
+            if not isinstance(t, Float8Tensor):
+                return Float8Tensor.from_float32(t, tensor_to_scale(t, E4M3), E4M3)
+            return t
+
         args = tree_map(maybe_unwrap, args)
+        args = tree_map(maybe_wrap, args)
         if kwargs is not None:
             kwargs = tree_map(maybe_unwrap, kwargs)
+            kwargs = tree_map(maybe_wrap, kwargs)
+
         out = super().__torch_dispatch__(func, types, args, kwargs)
         return out
 
