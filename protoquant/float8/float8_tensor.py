@@ -137,12 +137,15 @@ class Float8Tensor(torch.Tensor):
             return t
 
         args = tree_map(maybe_unwrap, args)
-        args = tree_map(maybe_wrap, args)
         if kwargs is not None:
             kwargs = tree_map(maybe_unwrap, kwargs)
-            kwargs = tree_map(maybe_wrap, kwargs)
 
         out = super().__torch_dispatch__(func, types, args, kwargs)
+
+        if func is aten.uniform_.default:
+            args = tree_map(maybe_wrap, args)
+        print("after ", args)
+
         return out
 
     # Do not force the Float8Tensor type on the returned tensor
