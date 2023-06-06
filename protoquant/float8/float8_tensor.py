@@ -88,6 +88,13 @@ class Float8Tensor(torch.Tensor):
         return Float8ConstrFunc.apply(self)
 
     @classmethod
+    def update_inplace_fp8_tensor(cls, t, u):
+        if isinstance(t, Float8Tensor) and isinstance(u, Float8Tensor):
+            t._data = u._data
+            t._scale = u._scale
+            t._flavor = u._flavor
+
+    @classmethod
     def from_float32(cls, tensor, scale, flavor):
         return Float8ConstrFunc.apply(tensor, scale, flavor)
 
@@ -136,15 +143,17 @@ class Float8Tensor(torch.Tensor):
                 return Float8Tensor.from_float32(t, tensor_to_scale(t, E4M3), E4M3)
             return t
 
-        args = tree_map(maybe_unwrap, args)
-        if kwargs is not None:
-            kwargs = tree_map(maybe_unwrap, kwargs)
-
-        out = super().__torch_dispatch__(func, types, args, kwargs)
-
         if func is aten.uniform_.default:
+            save_args = args
+            args = tree_map(maybe_unwrap, args)
+            out = super().__torch_dispatch__(func, types, args, kwargs)
             args = tree_map(maybe_wrap, args)
-        print("after ", args)
+            list(map(Float8Tensor.update_inplace_fp8_tensor, save_args, args))
+        else:
+            args = tree_map(maybe_unwrap, args)
+            if kwargs is not None:
+                kwargs = tree_map(maybe_unwrap, kwargs)
+            out = super().__torch_dispatch__(func, types, args, kwargs)
 
         return out
 
