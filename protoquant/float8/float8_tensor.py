@@ -2,7 +2,7 @@ from enum import Enum
 import torch
 from torch.utils._pytree import tree_map
 
-from float8_utils import E4M3, E5M2
+from float8_utils import E4M3, E5M2, tensor_to_scale
 
 aten = torch.ops.aten
 
@@ -88,6 +88,13 @@ class Float8Tensor(torch.Tensor):
         return Float8ConstrFunc.apply(self)
 
     @classmethod
+    def update_inplace_fp8_tensor(cls, t, u):
+        if isinstance(t, Float8Tensor) and isinstance(u, Float8Tensor):
+            t._data = u._data
+            t._scale = u._scale
+            t._flavor = u._flavor
+
+    @classmethod
     def from_float32(cls, tensor, scale, flavor):
         return Float8ConstrFunc.apply(tensor, scale, flavor)
 
@@ -131,10 +138,39 @@ class Float8Tensor(torch.Tensor):
                 return t.to_float32()
             return t
 
-        args = tree_map(maybe_unwrap, args)
-        if kwargs is not None:
-            kwargs = tree_map(maybe_unwrap, kwargs)
-        out = super().__torch_dispatch__(func, types, args, kwargs)
+        def maybe_wrap(t):
+            if not isinstance(t, Float8Tensor):
+                return Float8Tensor.from_float32(t, tensor_to_scale(t, E4M3), E4M3)
+            return t
+
+        # override the aten.uniform function to enable FP8 tensor init
+        if func is aten.uniform_.default:
+            # save the input FP8 tensors
+            save_args = args
+
+            # replace the FP8 tensors with FP32 tensors which will be init
+            args = tree_map(maybe_unwrap, args)
+
+            # Initialize the FP32 version of tensors
+            out = super().__torch_dispatch__(func, types, args, kwargs)
+
+            # Convert the FP32 tensors back to FP8 precision.
+            args = tree_map(maybe_wrap, args)
+
+            # Note that since
+            # Float8ConstrFunc returns new tensors when converting FP8->FP32 or
+            # FP32 -> FP8, the `args` (converted tensors) returned will be a new
+            # tensor. So just copying the reqd info `data_`, `flavor_` and
+            # `_scale` from the newly return FP8 tensors to the original
+            # `saved_args` tensor
+            list(map(Float8Tensor.update_inplace_fp8_tensor, save_args, args))
+
+        else:
+            args = tree_map(maybe_unwrap, args)
+            if kwargs is not None:
+                kwargs = tree_map(maybe_unwrap, kwargs)
+            out = super().__torch_dispatch__(func, types, args, kwargs)
+
         return out
 
     # Do not force the Float8Tensor type on the returned tensor
